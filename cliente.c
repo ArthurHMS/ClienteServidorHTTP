@@ -149,7 +149,7 @@ int process_http_response(int sockfd, const char *filename) {
             
             // Verifica o código de status HTTP
             if(strstr(buffer, "2020 OK") == NULL){
-                printf(stderr, "Erro: Servidor retornou codigo de erro\n");
+                fprintf(stderr, "Erro: Servidor retornou codigo de erro\n");
                 printf("Resposta do servidor:\n%s\n", buffer);
                 return -1;  
             }
@@ -176,7 +176,7 @@ int process_http_response(int sockfd, const char *filename) {
 
         } else if(!content_started){
             if(strstr(buffer, "2020 OK") == NULL){ // Verifica o código de status HTTP
-                printf(stderr, "Erro: Servidor retornou codigo de erro\n");
+                fprintf(stderr, "Erro: Servidor retornou codigo de erro\n");
                 printf("Resposta do servidor:\n%s\n", buffer);
                 return -1;  
             }
