@@ -13,43 +13,49 @@
 #define PORT 8080
 #define MAX_PATH_LENGTH 1024
 
-//Função para obter o tipo MIME baseado na extensão do arquivo
+// Função para obter o tipo MIME baseado na extensão do arquivo
 const char* get_mime_type(const char *filename) {
     const char *ext = strrchr(filename, '.');
-    if (!ext == NULL) return "application/octet-stream";
-    
-    if (strcmp(ext, ".html") == 0 || strcmp(ext, ".htm" ) == 0) 
+    if (ext == NULL) return "application/octet-stream";
+
+    if (strcmp(ext, ".html") == 0 || strcmp(ext, ".htm") == 0)
         return "text/html";
-    else if (strcmp(ext, ".jpg") == 0 || strcmp(ext, ".jpeg") == 0) 
+    else if (strcmp(ext, ".jpg") == 0 || strcmp(ext, ".jpeg") == 0)
         return "image/jpeg";
-    else if (strcmp(ext, ".png") == 0) 
+    else if (strcmp(ext, ".png") == 0)
         return "image/png";
-    else if (strcmp(ext, ".css") == 0) 
+    else if (strcmp(ext, ".css") == 0)
         return "text/css";
-    else if (strcmp(ext, ".js") == 0) 
+    else if (strcmp(ext, ".js") == 0)
         return "application/javascript";
-    else if (strcmp(ext, ".txt") == 0) 
+    else if (strcmp(ext, ".txt") == 0)
         return "text/plain";
-    else if (strcmp(ext, ".pdf") == 0) 
+    else if (strcmp(ext, ".pdf") == 0)
         return "application/pdf";
-    else 
+    else
         return "application/octet-stream";
 }
 
 // Função para enviar resposta de erro HTTP
 void send_error(int client_sock, int status_code, const char *status_msg, const char *message) {
-    char response[BUFFER_SIZE];
-    int length = snprintf(response, sizeof(response),
+    char body[BUFFER_SIZE];
+    int body_len = snprintf(body, sizeof(body),
+        "<html><body><h1>%d %s</h1><p>%s</p></body></html>",
+        status_code, status_msg, message);
+    if (body_len < 0) return;
+
+    char header[BUFFER_SIZE];
+    int header_len = snprintf(header, sizeof(header),
         "HTTP/1.1 %d %s\r\n"
         "Content-Type: text/html\r\n"
-        "Content-Length: %zu\r\n"
+        "Content-Length: %d\r\n"
         "Connection: close\r\n"
-        "\r\n"
-        "<html><body><h1>%d %s</h1><p>%s</p></body></html>",
-        status_code, status_msg, status_code, status_msg, message);
-    
-    send(client_sock, response, length, 0);
+        "\r\n",
+        status_code, status_msg, body_len);
+    if (header_len < 0) return;
 
+    send(client_sock, header, header_len, 0);
+    send(client_sock, body, body_len, 0);
 }
 
 // Função para enviar arquivo
@@ -61,7 +67,11 @@ void send_file(int client_sock, const char *filepath) {
     }
 
     // Obter tamanho do arquivo
-    fseek(file, 0, SEEK_END);
+    if (fseek(file, 0, SEEK_END) != 0) {
+        fclose(file);
+        send_error(client_sock, 500, "Internal Server Error", "Erro ao ler o arquivo.");
+        return;
+    }
     long filesize = ftell(file);
     fseek(file, 0, SEEK_SET);
 
@@ -71,22 +81,27 @@ void send_file(int client_sock, const char *filepath) {
     char header[BUFFER_SIZE];
     int header_length = snprintf(header, sizeof(header),
         "HTTP/1.1 200 OK\r\n"
-        char link_path[MAX_PATH_LENGTH];
-        snprintf(link_path, sizeof(link_path), "%s/%s", request_path, entry->d_name);
-
         "Content-Type: %s\r\n"
         "Content-Length: %ld\r\n"
         "Connection: close\r\n"
         "\r\n",
         mime_type, filesize);
-    
+
+    if (header_length < 0) {
+        fclose(file);
+        return;
+    }
+
     send(client_sock, header, header_length, 0);
 
     // Enviar conteúdo do arquivo
     char buffer[BUFFER_SIZE];
     size_t bytes_read;
     while ((bytes_read = fread(buffer, 1, sizeof(buffer), file)) > 0) {
-        send(client_sock, buffer, bytes_read, 0);
+        ssize_t sent = send(client_sock, buffer, bytes_read, 0);
+        if (sent < 0) {
+            break; // erro de envio, fecha e retorna
+        }
     }
 
     fclose(file);
@@ -101,7 +116,7 @@ void send_directory_listing(int client_sock, const char *base_path, const char *
     }
 
     // Iniciar resposta HTTP
-    char header[] = 
+    char header[] =
         "HTTP/1.1 200 OK\r\n"
         "Content-Type: text/html\r\n"
         "Connection: close\r\n"
@@ -112,44 +127,63 @@ void send_directory_listing(int client_sock, const char *base_path, const char *
     char html_start[BUFFER_SIZE];
     int html_len = snprintf(html_start, sizeof(html_start),
         "<html><head><title>Listagem de diretorio</title></head>\n"
-        "<body><h1> Listagem de diretorio para %s</h1>\n"
-        "<table border= '1' style='border-collapse: collapse;'>\n"
+        "<body><h1>Listagem de diretorio para /%s</h1>\n"
+        "<table border='1' style='border-collapse: collapse;'>\n"
         "<tr><th>Nome</th><th>Tamanho (bytes)</th><th>Ultima Modificacao</th></tr>\n",
-        request_path);
-    send(client_sock, html_start, html_len, 0);
-    
+        request_path[0] == '\0' ? "" : request_path);
+    if (html_len > 0) send(client_sock, html_start, html_len, 0);
+
     // Listar arquivos e diretórios
     struct dirent *entry;
     struct stat file_stat;
     char full_path[MAX_PATH_LENGTH];
     char time_str[64];
-    
-    while ((entry = readdir(dir)) != NULL) {
 
+    while ((entry = readdir(dir)) != NULL) {
         // Ignorar "." e ".."
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
-            continue;   
-        
+            continue;
+        }
+
+        // Construir caminho completo
         snprintf(full_path, sizeof(full_path), "%s/%s", base_path, entry->d_name);
-        
-        if (stat(full_path, &file_stat) == 0) {
-            
-        //formatar data e hora da última modificação
-        strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", localtime(&file_stat.st_mtime));
+
+        if (stat(full_path, &file_stat) != 0) {
+            continue; // não conseguiu ler info do arquivo, pula
+        }
+
+        // formatar data e hora da última modificação
+        struct tm *tm_info = localtime(&file_stat.st_mtime);
+        if (tm_info != NULL) {
+            strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", tm_info);
+        } else {
+            strncpy(time_str, "-", sizeof(time_str));
+            time_str[sizeof(time_str)-1] = '\0';
+        }
 
         char row[BUFFER_SIZE];
-        const char *size_str = S_ISDIR(file_stat.st_mode) ? "DIR" : "FILE";
-        off_t file_size = S_ISDIR(file_stat.st_mode) ? 0 : file_stat.st_size;
-
-        // Criar link para o arquivo ou diretório
         char link_path[MAX_PATH_LENGTH];
-        snprintf(link_path, sizeof(link_path), "%s/%s", request_path, entry->d_name);
 
-        int row_len = snprintf(row, sizeof(row),
-            "<tr><td><a href=\"%s\">%s</a></td><td>%s</td><td>%s</td></tr>\n",
-            link_path, entry->d_name, S_ISDIR(file_stat.st_mode) ? "DIR" : "FILE", time_str);
-        send(client_sock, row, row_len, 0);
-        }    
+        // Construir link relativo para o arquivo/diretório
+        if (request_path[0] == '\0') {
+            snprintf(link_path, sizeof(link_path), "/%s", entry->d_name);
+        } else {
+            snprintf(link_path, sizeof(link_path), "/%s/%s", request_path, entry->d_name);
+        }
+
+        if (S_ISDIR(file_stat.st_mode)) {
+            // Diretório: mostrar "DIR" na coluna de tamanho
+            int row_len = snprintf(row, sizeof(row),
+                "<tr><td><a href=\"%s\">%s/</a></td><td>%s</td><td>%s</td></tr>\n",
+                link_path, entry->d_name, "DIR", time_str);
+            if (row_len > 0) send(client_sock, row, row_len, 0);
+        } else {
+            // Arquivo: mostrar tamanho em bytes
+            int row_len = snprintf(row, sizeof(row),
+                "<tr><td><a href=\"%s\">%s</a></td><td>%lld</td><td>%s</td></tr>\n",
+                link_path, entry->d_name, (long long)file_stat.st_size, time_str);
+            if (row_len > 0) send(client_sock, row, row_len, 0);
+        }
     }
     closedir(dir);
 
@@ -169,13 +203,13 @@ void handle_request(int client_sock, const char *base_directory) {
 
     buffer[bytes_received] = '\0';
 
-    // Parsear a requisição
+    // Parsear a requisição - apenas GET suportado
     if (strncmp(buffer, "GET ", 4) != 0) {
         send_error(client_sock, 405, "Method Not Allowed", "Apenas o método GET é suportado.");
         close(client_sock);
         return;
     }
-    
+
     // Extrair o path do recurso solicitado
     char *path_start = buffer + 4;
     char *path_end = strchr(path_start, ' ');
@@ -188,21 +222,24 @@ void handle_request(int client_sock, const char *base_directory) {
     *path_end = '\0';
     char requested_path[MAX_PATH_LENGTH];
 
-    // Decodificar URL
+    // Decodificar URL (aqui apenas copia, sem decode %xx)
     strncpy(requested_path, path_start, sizeof(requested_path) - 1);
     requested_path[sizeof(requested_path) - 1] = '\0';
 
-    // Se o path for "/", usar ""
+    // Normalizar path: remover '/' inicial se existir
     if (strcmp(requested_path, "/") == 0) {
-        strcpy(requested_path, "");
-    } else {
-        // Remover a barra inicial
-        memmove(requested_path, requested_path + 1, strlen(requested_path));
+        requested_path[0] = '\0';
+    } else if (requested_path[0] == '/') {
+        size_t len = strlen(requested_path);
+        memmove(requested_path, requested_path + 1, len); // inclui o '\0'
     }
 
     // Construir o caminho completo do arquivo ou diretório
     char full_path[MAX_PATH_LENGTH];
-    snprintf(full_path, sizeof(full_path), "%s/%s", base_directory, requested_path);
+    if (requested_path[0] == '\0')
+        snprintf(full_path, sizeof(full_path), "%s", base_directory);
+    else
+        snprintf(full_path, sizeof(full_path), "%s/%s", base_directory, requested_path);
 
     // Verificar se é um diretório ou arquivo
     struct stat path_stat;
@@ -212,8 +249,8 @@ void handle_request(int client_sock, const char *base_directory) {
         return;
     }
 
-    if(S_ISDIR(path_stat.st_mode)) {
-        // É um diretório - verificar se exister index.html
+    if (S_ISDIR(path_stat.st_mode)) {
+        // É um diretório - verificar se existe index.html
         char index_path[MAX_PATH_LENGTH];
         snprintf(index_path, sizeof(index_path), "%s/index.html", full_path);
 
@@ -222,15 +259,15 @@ void handle_request(int client_sock, const char *base_directory) {
             send_file(client_sock, index_path);
         } else {
             // Gerar listagem do diretório
+            // request_path passado sem barra inicial (p.ex. "subdir" ou "")
             send_directory_listing(client_sock, full_path, requested_path);
         }
     } else {
         // É um arquivo - enviar o arquivo
         send_file(client_sock, full_path);
     }
-    
-    close(client_sock);
 
+    close(client_sock);
 }
 
 int main(int argc, char *argv[]) {
@@ -288,7 +325,7 @@ int main(int argc, char *argv[]) {
     printf("Servidor HTTP rodando em http://localhost:%d/\n", PORT);
     printf("Servindo arquivos do diretório: %s\n", base_directory);
 
-    // Loop principal para aceitar conexões
+    // Loop principal para aceitar conexões (serial, não-threaded)
     while (1) {
         struct sockaddr_in client_addr;
         socklen_t client_len = sizeof(client_addr);
@@ -304,6 +341,7 @@ int main(int argc, char *argv[]) {
         // Processar a requisição do cliente
         handle_request(client_sock, base_directory);
     }
+
     close(server_sock);
-    return 0; 
+    return 0;
 }
