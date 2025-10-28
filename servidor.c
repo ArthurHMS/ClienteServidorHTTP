@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -243,107 +244,6 @@ void handle_request(int client_sock, const char *base_directory) {
     // Verificar se é um diretório ou arquivo
     struct stat path_stat;
     if (stat(full_path, &path_stat) != 0) {
-        send_error(client_sock, 404, "Not Found", "Recurso não encontrado.");
-        close(client_sock);
-        return;
-    }
-
-    if (S_ISDIR(path_stat.st_mode)) {
-        // É um diretório - verificar se existe index.html
-        char index_path[MAX_PATH_LENGTH];
-        snprintf(index_path, sizeof(index_path), "%s/index.html", full_path);
-
-        if (access(index_path, F_OK) == 0) {
-            // index.html existe - enviar o arquivo
-            send_file(client_sock, index_path);
-        } else {
-            // Gerar listagem do diretório
-            // request_path passado sem barra inicial (p.ex. "subdir" ou "")
-            send_directory_listing(client_sock, full_path, requested_path);
-        }
-    } else {
-        // É um arquivo - enviar o arquivo
-        send_file(client_sock, full_path);
-    }
-
-    close(client_sock);
-}
-
-int main(int argc, char *argv[]) {
-    if (argc != 2) {
-        fprintf(stderr, "Uso: %s <diretorio>\n", argv[0]);
-        fprintf(stderr, "Exemplo: %s /home/usuario/arquivos\n", argv[0]);
-        return 1;
-    }
-
-    const char *base_directory = argv[1];
-
-    // Verificar se o diretório existe
-    struct stat dir_stat;
-    if (stat(base_directory, &dir_stat) != 0 || !S_ISDIR(dir_stat.st_mode)) {
-        fprintf(stderr, "Erro: O diretório '%s' não existe ou não é um diretório válido.\n", base_directory);
-        return 1;
-    }
-
-    // Criar socket do servidor
-    int server_sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_sock < 0) {
-        perror("Erro ao criar socket do servidor");
-        return 1;
-    }
-
-    // Configurar opções do socket
-    int opt = 1;
-    if (setsockopt(server_sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
-        perror("Erro ao configurar opções do socket");
-        close(server_sock);
-        return 1;
-    }
-
-    // Configurar endereço do servidor
-    struct sockaddr_in server_addr;
-    memset(&server_addr, 0, sizeof(server_addr));
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_addr.s_addr = INADDR_ANY;
-    server_addr.sin_port = htons(PORT);
-
-    // Vincular o socket
-    if (bind(server_sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
-        perror("Erro ao vincular o socket");
-        close(server_sock);
-        return 1;
-    }
-
-    // Ouvir por conexões
-    if (listen(server_sock, 5) < 0) {
-        perror("Erro ao ouvir por conexões");
-        close(server_sock);
-        return 1;
-    }
-
-    printf("Servidor HTTP rodando em http://localhost:%d/\n", PORT);
-    printf("Servindo arquivos do diretório: %s\n", base_directory);
-
-    // Loop principal para aceitar conexões (serial, não-threaded)
-    while (1) {
-        struct sockaddr_in client_addr;
-        socklen_t client_len = sizeof(client_addr);
-
-        int client_sock = accept(server_sock, (struct sockaddr *)&client_addr, &client_len);
-        if (client_sock < 0) {
-            perror("Erro ao aceitar conexão");
-            continue;
-        }
-
-        printf("Conexão aceita de %s:%d\n", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
-
-        // Processar a requisição do cliente
-        handle_request(client_sock, base_directory);
-    }
-
-    close(server_sock);
-    return 0;
-}
         send_error(client_sock, 404, "Not Found", "Recurso não encontrado.");
         close(client_sock);
         return;
